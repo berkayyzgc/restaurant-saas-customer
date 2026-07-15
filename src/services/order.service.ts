@@ -27,16 +27,27 @@ export interface CreatedOrder {
   updatedAt: string
 }
 
+export interface TableBillSummary {
+  tableSessionId: number | null
+  totalAmount: number
+  paidAmount: number
+  remainingAmount: number
+  orderCount: number
+}
+
 export async function createOrder(
   payload: CreateOrderPayload,
 ): Promise<CreatedOrder> {
-  const response = await fetch('http://localhost:3000/orders', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
+  const response = await fetch(
+    'http://localhost:3000/orders',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
     },
-    body: JSON.stringify(payload),
-  })
+  )
 
   if (!response.ok) {
     const errorBody = await response
@@ -65,7 +76,9 @@ export async function getActiveOrderByTable(
   )
 
   if (!response.ok) {
-    throw new Error('Aktif sipariş bilgisi alınamadı.')
+    throw new Error(
+      'Aktif sipariş bilgisi alınamadı.',
+    )
   }
 
   const responseText = await response.text()
@@ -74,5 +87,23 @@ export async function getActiveOrderByTable(
     return null
   }
 
-  return JSON.parse(responseText) as CreatedOrder
+  return JSON.parse(
+    responseText,
+  ) as CreatedOrder
+}
+
+export async function getTableBillSummary(
+  tableId: number,
+): Promise<TableBillSummary> {
+  const response = await fetch(
+    `http://localhost:3000/orders/table/${tableId}/bill-summary`,
+  )
+
+  if (!response.ok) {
+    throw new Error(
+      'Masa hesap özeti alınamadı.',
+    )
+  }
+
+  return response.json() as Promise<TableBillSummary>
 }

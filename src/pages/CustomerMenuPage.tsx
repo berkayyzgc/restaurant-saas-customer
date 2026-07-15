@@ -6,11 +6,28 @@ import { useCart } from '../hooks/useCart'
 import {
   createOrder,
   getActiveOrderByTable,
+  getTableBillSummary,
   type CreatedOrder,
   type OrderStatus,
+  type TableBillSummary,
 } from '../services/order.service'
+import { payTableBill } from '../services/payment.service'
+import {
+  callWaiter,
+  requestBill,
+  type ServiceRequestType,
+} from '../services/service-request.service'
 import { getTableByQrToken } from '../services/table.service'
-import type { MenuCategory, TableDetails } from '../types/table'
+import type {
+  MenuCategory,
+  TableDetails,
+} from '../types/table'
+
+type CustomerTrackedOrder = CreatedOrder & {
+  tableSessionId: number
+  paymentStatus?: 'UNPAID' | 'PAID'
+  paidAt?: string | null
+}
 
 interface OrderUpdatedEvent {
   id: number
@@ -53,16 +70,48 @@ const orderSteps: Array<{
 export default function CustomerMenuPage() {
   const { token } = useParams<{ token: string }>()
 
-  const [table, setTable] = useState<TableDetails | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [activeCategoryId, setActiveCategoryId] = useState<number | null>(null)
+  const [table, setTable] =
+    useState<TableDetails | null>(null)
+  const [error, setError] =
+    useState<string | null>(null)
+  const [activeCategoryId, setActiveCategoryId] =
+    useState<number | null>(null)
   const [isCartOpen, setIsCartOpen] = useState(false)
   const [orderNote, setOrderNote] = useState('')
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [orderError, setOrderError] = useState<string | null>(null)
-  const [orderSuccess, setOrderSuccess] = useState(false)
-  const [trackedOrder, setTrackedOrder] = useState<CreatedOrder | null>(null)
-  const [isSocketConnected, setIsSocketConnected] = useState(false)
+  const [isSubmitting, setIsSubmitting] =
+    useState(false)
+  const [orderError, setOrderError] =
+    useState<string | null>(null)
+  const [orderSuccess, setOrderSuccess] =
+    useState(false)
+  const [trackedOrder, setTrackedOrder] =
+    useState<CustomerTrackedOrder | null>(null)
+    const [billSummary, setBillSummary] =
+  useState<TableBillSummary | null>(null)
+  const [isSocketConnected, setIsSocketConnected] =
+    useState(false)
+
+  const [isPaymentOpen, setIsPaymentOpen] =
+    useState(false)
+  const [keepSessionOpen, setKeepSessionOpen] =
+    useState(true)
+  const [isPaying, setIsPaying] = useState(false)
+  const [paymentError, setPaymentError] =
+    useState<string | null>(null)
+  const [paymentSuccessMessage, setPaymentSuccessMessage] =
+    useState<string | null>(null)
+    const [cardholderName, setCardholderName] = useState('')
+const [cardNumber, setCardNumber] = useState('')
+const [cardExpiry, setCardExpiry] = useState('')
+const [cardCvv, setCardCvv] = useState('')
+const [sendingServiceRequest, setSendingServiceRequest] =
+  useState<ServiceRequestType | null>(null)
+
+const [serviceRequestMessage, setServiceRequestMessage] =
+  useState<string | null>(null)
+
+const [serviceRequestError, setServiceRequestError] =
+  useState<string | null>(null)
 
   const {
     cartItems,
@@ -73,7 +122,9 @@ export default function CustomerMenuPage() {
     decreaseItem,
     removeItem,
     clearCart,
-  } = useCart(token ? `restaurant-cart:${token}` : undefined)
+  } = useCart(
+    token ? `restaurant-cart:${token}` : undefined,
+  )
 
   useEffect(() => {
     if (!token) {
@@ -86,25 +137,37 @@ export default function CustomerMenuPage() {
         setTable(data)
         setError(null)
 
-        const firstCategory = data.restaurant.menuCategories[0]
+        const firstCategory =
+          data.restaurant.menuCategories[0]
 
         if (firstCategory) {
           setActiveCategoryId(firstCategory.id)
         }
 
         try {
-          const activeOrder = await getActiveOrderByTable(data.id)
-          setTrackedOrder(activeOrder)
-        } catch (activeOrderError) {
-          console.error(
-            'Aktif sipariş bilgisi alınamadı:',
-            activeOrderError,
-          )
-        }
+  const [activeOrder, currentBillSummary] =
+    await Promise.all([
+      getActiveOrderByTable(data.id),
+      getTableBillSummary(data.id),
+    ])
+
+  setTrackedOrder(
+    activeOrder as CustomerTrackedOrder | null,
+  )
+
+  setBillSummary(currentBillSummary)
+} catch (requestError) {
+  console.error(
+    'Sipariş veya hesap bilgisi alınamadı:',
+    requestError,
+  )
+}
       })
       .catch((requestError: unknown) => {
         console.error(requestError)
-        setError('Masa ve menü bilgileri alınamadı.')
+        setError(
+          'Masa ve menü bilgileri alınamadı.',
+        )
       })
   }, [token])
 
@@ -124,23 +187,28 @@ export default function CustomerMenuPage() {
       setIsSocketConnected(false)
     })
 
-    socket.on('order-updated', (updatedOrder: OrderUpdatedEvent) => {
-      if (updatedOrder.id !== trackedOrder.id) {
-        return
-      }
-
-      setTrackedOrder((currentOrder) => {
-        if (!currentOrder) {
-          return currentOrder
+    socket.on(
+      'order-updated',
+      (updatedOrder: OrderUpdatedEvent) => {
+        if (updatedOrder.id !== trackedOrder.id) {
+          return
         }
 
-        return {
-          ...currentOrder,
-          status: updatedOrder.status,
-          updatedAt: updatedOrder.updatedAt ?? currentOrder.updatedAt,
-        }
-      })
-    })
+        setTrackedOrder((currentOrder) => {
+          if (!currentOrder) {
+            return currentOrder
+          }
+
+          return {
+            ...currentOrder,
+            status: updatedOrder.status,
+            updatedAt:
+              updatedOrder.updatedAt ??
+              currentOrder.updatedAt,
+          }
+        })
+      },
+    )
 
     return () => {
       socket.off('connect')
@@ -164,22 +232,74 @@ export default function CustomerMenuPage() {
     }
   }, [orderSuccess])
 
+  useEffect(() => {
+    if (!paymentSuccessMessage) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setPaymentSuccessMessage(null)
+    }, 6000)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [paymentSuccessMessage])
+
+  useEffect(() => {
+  if (!table) {
+    return
+  }
+
+  let isCancelled = false
+
+  const refreshBillSummary = async () => {
+    try {
+      const updatedBillSummary =
+        await getTableBillSummary(table.id)
+
+      if (!isCancelled) {
+        setBillSummary(updatedBillSummary)
+      }
+    } catch (requestError) {
+      console.error(
+        'Hesap özeti güncellenemedi:',
+        requestError,
+      )
+    }
+  }
+
+  refreshBillSummary()
+
+  const intervalId = window.setInterval(
+    refreshBillSummary,
+    2000,
+  )
+
+  return () => {
+    isCancelled = true
+    window.clearInterval(intervalId)
+  }
+}, [table?.id])
+
   const categories = useMemo(
     () => table?.restaurant.menuCategories ?? [],
     [table],
   )
 
-  const activeCategory = useMemo<MenuCategory | null>(() => {
-    if (categories.length === 0) {
-      return null
-    }
+  const activeCategory =
+    useMemo<MenuCategory | null>(() => {
+      if (categories.length === 0) {
+        return null
+      }
 
-    return (
-      categories.find(
-        (category) => category.id === activeCategoryId,
-      ) ?? categories[0]
-    )
-  }, [activeCategoryId, categories])
+      return (
+        categories.find(
+          (category) =>
+            category.id === activeCategoryId,
+        ) ?? categories[0]
+      )
+    }, [activeCategoryId, categories])
 
   const activeOrderStepIndex = useMemo(() => {
     if (!trackedOrder) {
@@ -187,9 +307,14 @@ export default function CustomerMenuPage() {
     }
 
     return orderSteps.findIndex(
-      (step) => step.status === trackedOrder.status,
+      (step) =>
+        step.status === trackedOrder.status,
     )
   }, [trackedOrder])
+
+  const canPayOrder =
+    trackedOrder?.status === 'SERVED' &&
+    trackedOrder.paymentStatus !== 'PAID'
 
   function formatPrice(price: number | string) {
     return new Intl.NumberFormat('tr-TR', {
@@ -200,7 +325,11 @@ export default function CustomerMenuPage() {
   }
 
   async function handleCreateOrder() {
-    if (!table || cartItems.length === 0 || isSubmitting) {
+    if (
+      !table ||
+      cartItems.length === 0 ||
+      isSubmitting
+    ) {
       return
     }
 
@@ -218,8 +347,16 @@ export default function CustomerMenuPage() {
         })),
       })
 
-      setTrackedOrder(createdOrder)
-      clearCart()
+      setTrackedOrder(
+  createdOrder as CustomerTrackedOrder,
+)
+
+const updatedBillSummary =
+  await getTableBillSummary(table.id)
+
+setBillSummary(updatedBillSummary)
+
+clearCart()
       setOrderNote('')
       setOrderSuccess(true)
       setIsCartOpen(false)
@@ -236,11 +373,151 @@ export default function CustomerMenuPage() {
     }
   }
 
+  function openPaymentModal() {
+    setPaymentError(null)
+    setKeepSessionOpen(true)
+    setIsPaymentOpen(true)
+  }
+
+  function closePaymentModal() {
+    if (isPaying) {
+      return
+    }
+
+    setIsPaymentOpen(false)
+    setPaymentError(null)
+  }
+
+  async function handlePayBill() {
+    if (!trackedOrder || isPaying) {
+      return
+    }
+    const cardDigits = cardNumber.replace(/\s/g, '')
+
+if (
+  cardholderName.trim().length < 3 ||
+  cardDigits.length !== 16 ||
+  !/^\d{2}\/\d{2}$/.test(cardExpiry) ||
+  cardCvv.length !== 3
+) {
+  setPaymentError(
+    'Lütfen demo kart bilgilerini eksiksiz doldurun.',
+  )
+  return
+}
+
+    if (!trackedOrder.tableSessionId) {
+      setPaymentError(
+        'Masa oturumu bilgisi bulunamadı.',
+      )
+      return
+    }
+
+    setIsPaying(true)
+    setPaymentError(null)
+
+    try {
+      const payment = await payTableBill(
+        trackedOrder.tableSessionId,
+        keepSessionOpen,
+      )
+
+      setTrackedOrder((currentOrder) => {
+        if (!currentOrder) {
+          return currentOrder
+        }
+
+        return {
+          ...currentOrder,
+          paymentStatus: 'PAID',
+          paidAt:
+            payment.completedAt ??
+            new Date().toISOString(),
+        }
+      })
+
+      setIsPaymentOpen(false)
+
+      setCardholderName('')
+      setCardNumber('')
+      setCardExpiry('')
+      setCardCvv('')
+
+      if (keepSessionOpen) {
+        setPaymentSuccessMessage(
+          'Ödemeniz başarıyla tamamlandı. Masada kalmaya ve yeni sipariş vermeye devam edebilirsiniz.',
+        )
+      } else {
+        setPaymentSuccessMessage(
+          'Ödemeniz başarıyla tamamlandı. Masa hesabınız kapatıldı.',
+        )
+
+        setTrackedOrder(null)
+      }
+    } catch (requestError: unknown) {
+      console.error(
+        'Ödeme işlemi başarısız:',
+        requestError,
+      )
+
+      setPaymentError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Ödeme tamamlanamadı.',
+      )
+    } finally {
+      setIsPaying(false)
+    }
+  }
+
+  async function handleServiceRequest(
+  type: ServiceRequestType,
+) {
+  if (!table || sendingServiceRequest) {
+  return
+}
+
+  setSendingServiceRequest(type)
+  setServiceRequestError(null)
+  setServiceRequestMessage(null)
+
+  try {
+    if (type === 'CALL_WAITER') {
+      await callWaiter(table.id)
+
+      setServiceRequestMessage(
+        'Garson çağrınız iletildi. En kısa sürede masanıza gelecektir.',
+      )
+    } else {
+      await requestBill(table.id)
+
+      setServiceRequestMessage(
+        'Hesap talebiniz iletildi. Garsonunuz kısa süre içinde yardımcı olacaktır.',
+      )
+    }
+  } catch (requestError: unknown) {
+    console.error(
+      'Servis talebi gönderilemedi:',
+      requestError,
+    )
+
+    setServiceRequestError(
+      requestError instanceof Error
+        ? requestError.message
+        : 'Talebiniz gönderilemedi.',
+    )
+  } finally {
+    setSendingServiceRequest(null)
+  }
+}
+
   if (error) {
     return (
       <main className="state-page">
         <section className="state-card">
-          <p className="state-eyebrow">Bağlantı hatası</p>
+          <p className="state-eyebrow">
+            Bağlantı hatası
+          </p>
           <h1>Menü açılamadı</h1>
           <p>{error}</p>
         </section>
@@ -252,7 +529,9 @@ export default function CustomerMenuPage() {
     return (
       <main className="state-page">
         <section className="state-card">
-          <p className="state-eyebrow">Dijital menü</p>
+          <p className="state-eyebrow">
+            Dijital menü
+          </p>
           <h2>Menü yükleniyor...</h2>
           <p>Lütfen birkaç saniye bekleyin.</p>
         </section>
@@ -264,12 +543,16 @@ export default function CustomerMenuPage() {
     <main className="customer-page">
       <header className="customer-hero">
         <div className="hero-copy">
-          <p className="restaurant-kicker">Dijital Menü</p>
+          <p className="restaurant-kicker">
+            Dijital Menü
+          </p>
 
           <h1>{table.restaurant.name}</h1>
 
           <div className="hero-meta">
-            <span className="table-badge">{table.name}</span>
+            <span className="table-badge">
+              {table.name}
+            </span>
 
             {table.restaurant.city && (
               <span className="location-badge">
@@ -296,36 +579,133 @@ export default function CustomerMenuPage() {
         </button>
       </header>
 
+            <div className="customer-service-actions">
+        <div className="customer-service-heading">
+          <p className="section-kicker">
+            Masa hizmetleri
+          </p>
+
+          <h3>Nasıl yardımcı olabiliriz?</h3>
+        </div>
+
+        <div className="customer-service-buttons">
+          <button
+            type="button"
+            className="customer-service-button"
+            disabled={sendingServiceRequest !== null}
+            onClick={() =>
+              handleServiceRequest('CALL_WAITER')
+            }
+          >
+            <span>🔔</span>
+
+            <div>
+              <strong>
+                {sendingServiceRequest === 'CALL_WAITER'
+                  ? 'Garson çağrılıyor...'
+                  : 'Garson Çağır'}
+              </strong>
+
+              <small>
+                Masanıza bir görevli çağırın
+              </small>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="customer-service-button bill"
+            disabled={sendingServiceRequest !== null}
+            onClick={() =>
+              handleServiceRequest('REQUEST_BILL')
+            }
+          >
+            <span>🧾</span>
+
+            <div>
+              <strong>
+                {sendingServiceRequest === 'REQUEST_BILL'
+                  ? 'Talep gönderiliyor...'
+                  : 'Hesabı İste'}
+              </strong>
+
+              <small>
+                Garsonunuza hesap talebi gönderin
+              </small>
+            </div>
+          </button>
+        </div>
+
+        {serviceRequestMessage && (
+          <p className="service-request-message success">
+            {serviceRequestMessage}
+          </p>
+        )}
+
+        {serviceRequestError && (
+          <p className="service-request-message error">
+            {serviceRequestError}
+          </p>
+        )}
+      </div>
+
       {trackedOrder && (
         <section className="order-tracking-section">
           <div className="order-tracking-header">
             <div>
+              <div className="customer-bill-summary">
+  <div>
+    <p className="section-kicker">
+      Hesabım
+    </p>
+
+    <h3>Güncel Toplam</h3>
+
+    <small>
+  Masadaki tüm siparişlerin kalan toplamı
+</small>
+  </div>
+
+  <strong>
+  {formatPrice(
+    billSummary?.remainingAmount ?? 0,
+  )}
+</strong>
+</div>
               <p className="section-kicker">
                 Canlı sipariş takibi
               </p>
 
               <h2>
-  {trackedOrder.status === 'PENDING' &&
-    'Siparişiniz alındı'}
+                {trackedOrder.status ===
+                  'PENDING' &&
+                  'Siparişiniz alındı'}
 
-  {trackedOrder.status === 'ACCEPTED' &&
-    'Siparişiniz kabul edildi'}
+                {trackedOrder.status ===
+                  'ACCEPTED' &&
+                  'Siparişiniz kabul edildi'}
 
-  {trackedOrder.status === 'PREPARING' &&
-    'Siparişiniz hazırlanıyor'}
+                {trackedOrder.status ===
+                  'PREPARING' &&
+                  'Siparişiniz hazırlanıyor'}
 
-  {trackedOrder.status === 'READY' &&
-    'Siparişiniz servise hazır'}
+                {trackedOrder.status ===
+                  'READY' &&
+                  'Siparişiniz servise hazır'}
 
-  {trackedOrder.status === 'SERVED' &&
-    'Afiyet olsun'}
+                {trackedOrder.status ===
+                  'SERVED' &&
+                  'Afiyet olsun'}
 
-  {trackedOrder.status === 'CANCELLED' &&
-    'Siparişiniz iptal edildi'}
-</h2>
-<p className="order-tracking-table">
-  {table.name} • {table.restaurant.name}
-</p>
+                {trackedOrder.status ===
+                  'CANCELLED' &&
+                  'Siparişiniz iptal edildi'}
+              </h2>
+
+              <p className="order-tracking-table">
+                {table.name} •{' '}
+                {table.restaurant.name}
+              </p>
             </div>
 
             <span
@@ -341,38 +721,92 @@ export default function CustomerMenuPage() {
             </span>
           </div>
 
-          {trackedOrder.status === 'CANCELLED' ? (
+          {trackedOrder.status ===
+          'CANCELLED' ? (
             <p className="order-cancelled-message">
-              Siparişiniz iptal edildi. Lütfen restoran
-              görevlisiyle iletişime geçin.
+              Siparişiniz iptal edildi. Lütfen
+              restoran görevlisiyle iletişime geçin.
             </p>
           ) : (
-            <div className="order-tracking-steps">
-              {orderSteps.map((step, index) => {
-                const isCompleted =
-                  index < activeOrderStepIndex
-                const isActive =
-                  index === activeOrderStepIndex
+            <>
+              <div className="order-tracking-steps">
+                {orderSteps.map((step, index) => {
+                  const isCompleted =
+                    index <
+                    activeOrderStepIndex
+                  const isActive =
+                    index ===
+                    activeOrderStepIndex
 
-                return (
-                  <article
-                    key={step.status}
-                    className={`order-tracking-step${
-                      isCompleted ? ' completed' : ''
-                    }${isActive ? ' active' : ''}`}
+                  return (
+                    <article
+                      key={step.status}
+                      className={`order-tracking-step${
+                        isCompleted
+                          ? ' completed'
+                          : ''
+                      }${
+                        isActive
+                          ? ' active'
+                          : ''
+                      }`}
+                    >
+                      <div className="order-step-indicator">
+                        {isCompleted
+                          ? '✓'
+                          : index + 1}
+                      </div>
+
+                      <div>
+                        <h3>{step.title}</h3>
+                        <p>
+                          {step.description}
+                        </p>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+
+              {trackedOrder.paymentStatus ===
+                'PAID' && (
+                <div className="customer-payment-paid">
+                  <strong>
+                    ✓ Ödeme tamamlandı
+                  </strong>
+                  <p>
+                    Bu sipariş için ödeme başarıyla
+                    alındı.
+                  </p>
+                </div>
+              )}
+
+              {canPayOrder && (
+                <div className="customer-payment-action">
+                  <div>
+                    <p className="section-kicker">
+                      Masadan ödeme
+                    </p>
+                    <h3>Hesabınızı ödeyin</h3>
+                    <p>
+                      Ödeme sonrasında masada kalmayı
+                      veya hesabı kapatmayı
+                      seçebilirsiniz.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="customer-pay-button"
+                    onClick={openPaymentModal}
                   >
-                    <div className="order-step-indicator">
-                      {isCompleted ? '✓' : index + 1}
-                    </div>
-
-                    <div>
-                      <h3>{step.title}</h3>
-                      <p>{step.description}</p>
-                    </div>
-                  </article>
-                )
-              })}
-            </div>
+                    💳 Hesabı Öde
+                  </button>
+                </div>
+              )}
+             
+          
+            </>
           )}
         </section>
       )}
@@ -388,10 +822,14 @@ export default function CustomerMenuPage() {
           </div>
         </div>
 
-        <div className="category-tabs" role="tablist">
+        <div
+          className="category-tabs"
+          role="tablist"
+        >
           {categories.map((category) => {
             const isActive =
-              category.id === activeCategory?.id
+              category.id ===
+              activeCategory?.id
 
             return (
               <button
@@ -403,13 +841,16 @@ export default function CustomerMenuPage() {
                 role="tab"
                 aria-selected={isActive}
                 onClick={() =>
-                  setActiveCategoryId(category.id)
+                  setActiveCategoryId(
+                    category.id,
+                  )
                 }
               >
                 <span>{category.name}</span>
 
                 <small>
-                  {category.menuItems.length} ürün
+                  {category.menuItems.length}{' '}
+                  ürün
                 </small>
               </button>
             )
@@ -426,63 +867,81 @@ export default function CustomerMenuPage() {
                   Seçili kategori
                 </p>
 
-                <h2>{activeCategory.name}</h2>
+                <h2>
+                  {activeCategory.name}
+                </h2>
               </div>
 
               <span className="product-count">
-                {activeCategory.menuItems.length} ürün
+                {
+                  activeCategory.menuItems
+                    .length
+                }{' '}
+                ürün
               </span>
             </div>
 
-            {activeCategory.menuItems.length === 0 ? (
+            {activeCategory.menuItems
+              .length === 0 ? (
               <p className="empty-message">
-                Bu kategoride henüz ürün bulunmuyor.
+                Bu kategoride henüz ürün
+                bulunmuyor.
               </p>
             ) : (
               <div className="product-grid">
-                {activeCategory.menuItems.map((item) => (
-                  <article
-                    className="premium-product-card"
-                    key={item.id}
-                  >
-                    <div className="product-card-top">
-                      <div>
-                        <p className="product-category-label">
-                          {activeCategory.name}
-                        </p>
+                {activeCategory.menuItems.map(
+                  (item) => (
+                    <article
+                      className="premium-product-card"
+                      key={item.id}
+                    >
+                      <div className="product-card-top">
+                        <div>
+                          <p className="product-category-label">
+                            {
+                              activeCategory.name
+                            }
+                          </p>
 
-                        <h3>{item.name}</h3>
+                          <h3>{item.name}</h3>
+                        </div>
+
+                        <strong className="product-price">
+                          {formatPrice(
+                            item.price,
+                          )}
+                        </strong>
                       </div>
 
-                      <strong className="product-price">
-                        {formatPrice(item.price)}
-                      </strong>
-                    </div>
+                      {item.description && (
+                        <p className="product-description">
+                          {
+                            item.description
+                          }
+                        </p>
+                      )}
 
-                    {item.description && (
-                      <p className="product-description">
-                        {item.description}
-                      </p>
-                    )}
+                      <div className="product-card-bottom">
+                        <button
+                          className="product-detail-button"
+                          type="button"
+                        >
+                          Detay
+                        </button>
 
-                    <div className="product-card-bottom">
-                      <button
-                        className="product-detail-button"
-                        type="button"
-                      >
-                        Detay
-                      </button>
-
-                      <button
-                        className="add-to-cart-button"
-                        type="button"
-                        onClick={() => addItem(item)}
-                      >
-                        Sepete Ekle
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                        <button
+                          className="add-to-cart-button"
+                          type="button"
+                          onClick={() =>
+                            addItem(item)
+                          }
+                        >
+                          Sepete Ekle
+                        </button>
+                      </div>
+                    </article>
+                  ),
+                )}
               </div>
             )}
           </>
@@ -497,7 +956,9 @@ export default function CustomerMenuPage() {
         <section className="cart-summary">
           <div>
             <span>{totalQuantity} ürün</span>
-            <strong>{formatPrice(totalPrice)}</strong>
+            <strong>
+              {formatPrice(totalPrice)}
+            </strong>
           </div>
 
           <button
@@ -512,11 +973,15 @@ export default function CustomerMenuPage() {
       {isCartOpen && (
         <div
           className="cart-overlay"
-          onClick={() => setIsCartOpen(false)}
+          onClick={() =>
+            setIsCartOpen(false)
+          }
         >
           <aside
             className="cart-panel"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) =>
+              event.stopPropagation()
+            }
           >
             <div className="cart-panel-header">
               <div>
@@ -530,7 +995,9 @@ export default function CustomerMenuPage() {
               <button
                 className="cart-close-button"
                 type="button"
-                onClick={() => setIsCartOpen(false)}
+                onClick={() =>
+                  setIsCartOpen(false)
+                }
               >
                 Kapat
               </button>
@@ -543,75 +1010,92 @@ export default function CustomerMenuPage() {
             ) : (
               <>
                 <div className="cart-item-list">
-                  {cartItems.map((cartItem) => (
-                    <article
-                      className="cart-item"
-                      key={cartItem.item.id}
-                    >
-                      <div className="cart-item-info">
-                        <h3>{cartItem.item.name}</h3>
-
-                        <p>
-                          {formatPrice(
-                            cartItem.item.price,
-                          )}{' '}
-                          / adet
-                        </p>
-
-                        <div className="cart-quantity-controls">
-                          <button
-                            type="button"
-                            aria-label={`${cartItem.item.name} adedini azalt`}
-                            onClick={() =>
-                              decreaseItem(
-                                cartItem.item.id,
-                              )
+                  {cartItems.map(
+                    (cartItem) => (
+                      <article
+                        className="cart-item"
+                        key={
+                          cartItem.item.id
+                        }
+                      >
+                        <div className="cart-item-info">
+                          <h3>
+                            {
+                              cartItem.item
+                                .name
                             }
-                          >
-                            −
-                          </button>
+                          </h3>
 
+                          <p>
+                            {formatPrice(
+                              cartItem.item
+                                .price,
+                            )}{' '}
+                            / adet
+                          </p>
+
+                          <div className="cart-quantity-controls">
+                            <button
+                              type="button"
+                              aria-label={`${cartItem.item.name} adedini azalt`}
+                              onClick={() =>
+                                decreaseItem(
+                                  cartItem
+                                    .item.id,
+                                )
+                              }
+                            >
+                              −
+                            </button>
+
+                            <strong>
+                              {
+                                cartItem.quantity
+                              }
+                            </strong>
+
+                            <button
+                              type="button"
+                              aria-label={`${cartItem.item.name} adedini artır`}
+                              onClick={() =>
+                                increaseItem(
+                                  cartItem
+                                    .item.id,
+                                )
+                              }
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="cart-item-actions">
                           <strong>
-                            {cartItem.quantity}
+                            {formatPrice(
+                              Number(
+                                cartItem.item
+                                  .price,
+                              ) *
+                                cartItem.quantity,
+                            )}
                           </strong>
 
                           <button
+                            className="cart-remove-button"
                             type="button"
-                            aria-label={`${cartItem.item.name} adedini artır`}
                             onClick={() =>
-                              increaseItem(
-                                cartItem.item.id,
+                              removeItem(
+                                cartItem.item
+                                  .id,
                               )
                             }
                           >
-                            +
+                            Sil
                           </button>
                         </div>
-                      </div>
-
-                      <div className="cart-item-actions">
-                        <strong>
-                          {formatPrice(
-                            Number(
-                              cartItem.item.price,
-                            ) * cartItem.quantity,
-                          )}
-                        </strong>
-
-                        <button
-                          className="cart-remove-button"
-                          type="button"
-                          onClick={() =>
-                            removeItem(
-                              cartItem.item.id,
-                            )
-                          }
-                        >
-                          Sil
-                        </button>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    ),
+                  )}
                 </div>
 
                 <div className="cart-total">
@@ -631,7 +1115,9 @@ export default function CustomerMenuPage() {
                     id="order-note"
                     value={orderNote}
                     onChange={(event) =>
-                      setOrderNote(event.target.value)
+                      setOrderNote(
+                        event.target.value,
+                      )
                     }
                     placeholder="Örn: Soğansız olsun..."
                     maxLength={300}
@@ -663,9 +1149,219 @@ export default function CustomerMenuPage() {
         </div>
       )}
 
+      {isPaymentOpen && trackedOrder && (
+        <div
+          className="payment-overlay"
+          onClick={closePaymentModal}
+        >
+          <section
+            className="payment-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="payment-modal-title"
+            onClick={(event) =>
+              event.stopPropagation()
+            }
+          >
+            <div className="payment-modal-header">
+              <div>
+                <p className="section-kicker">
+                  Güvenli ödeme
+                </p>
+
+                <h2 id="payment-modal-title">
+                  Hesabı Öde
+                </h2>
+              </div>
+
+              <button
+                type="button"
+                className="payment-close-button"
+                disabled={isPaying}
+                onClick={closePaymentModal}
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="payment-modal-description">
+              Ödeme tamamlandıktan sonra ne yapmak
+              istediğinizi seçin.
+            </p>
+
+            <div className="payment-stay-options">
+              <button
+                type="button"
+                className={`payment-stay-option${
+                  keepSessionOpen
+                    ? ' selected'
+                    : ''
+                }`}
+                onClick={() =>
+                  setKeepSessionOpen(true)
+                }
+              >
+                <strong>
+                  Masada kalmaya devam edeceğim
+                </strong>
+                <span>
+                  Ödeme tamamlanır, masa açık kalır
+                  ve yeniden sipariş
+                  verebilirsiniz.
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`payment-stay-option${
+                  !keepSessionOpen
+                    ? ' selected'
+                    : ''
+                }`}
+                onClick={() =>
+                  setKeepSessionOpen(false)
+                }
+              >
+                <strong>
+                  Öde ve masadan ayrılacağım
+                </strong>
+                <span>
+                  Ödeme tamamlanır ve masa hesabı
+                  kapatılır.
+                </span>
+              </button>
+            </div>
+
+            {paymentError && (
+              <p className="payment-error-message">
+                {paymentError}
+              </p>
+            )}
+            <div className="demo-payment-form">
+  <div className="demo-payment-badge">
+    <span>💳</span>
+
+    <div>
+      <strong>Demo Kart Ödemesi</strong>
+      <small>Gerçek para çekilmez</small>
+    </div>
+  </div>
+
+  <label className="payment-field">
+    <span>Kart Üzerindeki İsim</span>
+
+    <input
+      type="text"
+      value={cardholderName}
+      onChange={(event) =>
+        setCardholderName(event.target.value)
+      }
+      placeholder="AD SOYAD"
+      autoComplete="cc-name"
+    />
+  </label>
+
+  <label className="payment-field">
+    <span>Kart Numarası</span>
+
+    <input
+      type="text"
+      value={cardNumber}
+      onChange={(event) => {
+        const digits = event.target.value
+          .replace(/\D/g, '')
+          .slice(0, 16)
+
+        const formatted = digits.replace(
+          /(\d{4})(?=\d)/g,
+          '$1 ',
+        )
+
+        setCardNumber(formatted)
+      }}
+      placeholder="4242 4242 4242 4242"
+      inputMode="numeric"
+      autoComplete="cc-number"
+    />
+  </label>
+
+  <div className="payment-field-row">
+    <label className="payment-field">
+      <span>Son Kullanma</span>
+
+      <input
+        type="text"
+        value={cardExpiry}
+        onChange={(event) => {
+          const digits = event.target.value
+            .replace(/\D/g, '')
+            .slice(0, 4)
+
+          const formatted =
+            digits.length > 2
+              ? `${digits.slice(0, 2)}/${digits.slice(2)}`
+              : digits
+
+          setCardExpiry(formatted)
+        }}
+        placeholder="AA/YY"
+        inputMode="numeric"
+        autoComplete="cc-exp"
+      />
+    </label>
+
+    <label className="payment-field">
+      <span>CVV</span>
+
+      <input
+        type="password"
+        value={cardCvv}
+        onChange={(event) =>
+          setCardCvv(
+            event.target.value
+              .replace(/\D/g, '')
+              .slice(0, 3),
+          )
+        }
+        placeholder="123"
+        inputMode="numeric"
+        autoComplete="cc-csc"
+      />
+    </label>
+  </div>
+</div>
+
+            <button
+              type="button"
+              className="payment-confirm-button"
+              disabled={isPaying}
+              onClick={handlePayBill}
+            >
+              {isPaying
+                ? 'Ödeme İşleniyor...'
+                : 'Ödemeyi Tamamla'}
+            </button>
+
+            <small className="payment-test-notice">
+              Şu anda test ödeme akışı
+              kullanılmaktadır. Gerçek kart çekimi
+              sonraki sağlayıcı entegrasyonunda
+              etkinleştirilecektir.
+            </small>
+          </section>
+        </div>
+      )}
+
       {orderSuccess && (
         <div className="order-success-toast">
-          Siparişiniz başarıyla mutfağa gönderildi.
+          Siparişiniz başarıyla mutfağa
+          gönderildi.
+        </div>
+      )}
+
+      {paymentSuccessMessage && (
+        <div className="payment-success-toast">
+          {paymentSuccessMessage}
         </div>
       )}
     </main>
