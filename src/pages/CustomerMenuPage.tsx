@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 import { io } from 'socket.io-client'
 import '../App.css'
@@ -66,9 +67,24 @@ const orderSteps: Array<{
     description: 'Siparişiniz masanıza teslim edildi.',
   },
 ]
-
+const customerLanguages = [
+  { code: 'tr', label: 'Türkçe', flag: '🇹🇷' },
+  { code: 'en', label: 'English', flag: '🇬🇧' },
+  { code: 'de', label: 'Deutsch', flag: '🇩🇪' },
+  { code: 'ru', label: 'Русский', flag: '🇷🇺' },
+  { code: 'ar', label: 'العربية', flag: '🇸🇦' },
+  { code: 'fr', label: 'Français', flag: '🇫🇷' },
+  { code: 'es', label: 'Español', flag: '🇪🇸' },
+  { code: 'it', label: 'Italiano', flag: '🇮🇹' },
+]
 export default function CustomerMenuPage() {
   const { token } = useParams<{ token: string }>()
+  const { t, i18n } = useTranslation()
+
+  const currentLanguage =
+    customerLanguages.find(
+      (language) => language.code === i18n.resolvedLanguage,
+    ) ?? customerLanguages[0]
 
   const [table, setTable] =
     useState<TableDetails | null>(null)
@@ -542,10 +558,62 @@ if (
   return (
     <main className="customer-page">
       <header className="customer-hero">
+        <div
+  style={{
+    position: 'absolute',
+    top: '20px',
+    right: '20px',
+    zIndex: 20,
+  }}
+>
+  <label
+    htmlFor="menu-language-select"
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '9px 12px',
+      borderRadius: '14px',
+      background: 'rgba(255, 255, 255, 0.94)',
+      border: '1px solid rgba(255, 255, 255, 0.4)',
+      boxShadow: '0 6px 20px rgba(0, 0, 0, 0.18)',
+    }}
+  >
+    <span aria-hidden="true">
+      {currentLanguage.flag}
+    </span>
+
+    <select
+      id="menu-language-select"
+      value={i18n.resolvedLanguage ?? 'tr'}
+      onChange={(event) =>
+        void i18n.changeLanguage(event.target.value)
+      }
+      aria-label={t('common.selectLanguage')}
+     style={{
+  border: 'none',
+  outline: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  fontSize: '14px',
+  fontWeight: 800,
+  color: '#111827',
+}}
+    >
+      {customerLanguages.map((language) => (
+        <option key={language.code} value={language.code}>
+          {language.flag} {language.label}
+        </option>
+      ))}
+    </select>
+  </label>
+</div>
+
+<div className="hero-copy"></div>
         <div className="hero-copy">
           <p className="restaurant-kicker">
-            Dijital Menü
-          </p>
+  {t('menu.title')}
+</p>
 
           <h1>{table.restaurant.name}</h1>
 
@@ -574,18 +642,18 @@ if (
           aria-label={`Sepetinizde ${totalQuantity} ürün var`}
           onClick={() => setIsCartOpen(true)}
         >
-          <span>Sepet</span>
+          <span>{t('cart.title')}</span>
           <strong>{totalQuantity}</strong>
         </button>
       </header>
 
             <div className="customer-service-actions">
         <div className="customer-service-heading">
-          <p className="section-kicker">
-            Masa hizmetleri
-          </p>
+         <p className="section-kicker">
+  {t('serviceRequest.title')}
+</p>
 
-          <h3>Nasıl yardımcı olabiliriz?</h3>
+          <h3>{t('serviceRequest.howCanWeHelp')}</h3>
         </div>
 
         <div className="customer-service-buttons">
@@ -602,13 +670,13 @@ if (
             <div>
               <strong>
                 {sendingServiceRequest === 'CALL_WAITER'
-                  ? 'Garson çağrılıyor...'
-                  : 'Garson Çağır'}
+  ? t('serviceRequest.sending')
+  : t('serviceRequest.callWaiter')}
               </strong>
 
               <small>
-                Masanıza bir görevli çağırın
-              </small>
+  {t('serviceRequest.callWaiterDescription')}
+</small>
             </div>
           </button>
 
@@ -625,13 +693,13 @@ if (
             <div>
               <strong>
                 {sendingServiceRequest === 'REQUEST_BILL'
-                  ? 'Talep gönderiliyor...'
-                  : 'Hesabı İste'}
+  ? t('serviceRequest.sending')
+  : t('serviceRequest.requestBill')}
               </strong>
 
               <small>
-                Garsonunuza hesap talebi gönderin
-              </small>
+  {t('serviceRequest.requestBillDescription')}
+</small>
             </div>
           </button>
         </div>
@@ -815,10 +883,10 @@ if (
         <div className="section-heading">
           <div>
             <p className="section-kicker">
-              Menüyü keşfet
-            </p>
+  {t('menu.explore')}
+</p>
 
-            <h2>Kategoriler</h2>
+            <h2>{t('menu.categories')}</h2>
           </div>
         </div>
 
@@ -930,14 +998,12 @@ if (
                         </button>
 
                         <button
-                          className="add-to-cart-button"
-                          type="button"
-                          onClick={() =>
-                            addItem(item)
-                          }
-                        >
-                          Sepete Ekle
-                        </button>
+  className="add-to-cart-button"
+  type="button"
+  onClick={() => addItem(item)}
+>
+  {t('menu.addToCart')}
+</button>
                       </div>
                     </article>
                   ),
