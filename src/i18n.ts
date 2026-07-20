@@ -34,14 +34,15 @@ const resources = {
       },
 
       menu: {
-        title: 'Menü',
-        categories: 'Kategoriler',
-        allProducts: 'Tüm Ürünler',
-        unavailable: 'Şu anda mevcut değil',
-        noProducts: 'Bu kategoride ürün bulunmuyor.',
-        add: 'Ekle',
-        added: 'Eklendi',
-      },
+  title: 'Menü',
+  explore: 'Menüyü Keşfet',
+  categories: 'Kategoriler',
+  allProducts: 'Tüm Ürünler',
+  unavailable: 'Şu anda mevcut değil',
+  noProducts: 'Bu kategoride ürün bulunmuyor.',
+  add: 'Ekle',
+  added: 'Eklendi',
+},
 
       cart: {
         title: 'Sepetim',
@@ -71,13 +72,16 @@ const resources = {
       },
 
       serviceRequest: {
-        title: 'Servis İşlemleri',
-        callWaiter: 'Garson Çağır',
-        requestBill: 'Hesap İste',
-        waiterCalled: 'Garson çağrıldı.',
-        billRequested: 'Hesap talebiniz iletildi.',
-        requestError: 'Talep gönderilemedi.',
-      },
+  title: 'Servis İşlemleri',
+  howCanWeHelp: 'Size nasıl yardımcı olabiliriz?',
+  callWaiter: 'Garson Çağır',
+  callWaiterDescription: 'Garsonun masanıza gelmesini isteyin.',
+  requestBill: 'Hesap İste',
+  requestBillDescription: 'Hesabınızın hazırlanmasını isteyin.',
+  waiterCalled: 'Garson çağrıldı.',
+  billRequested: 'Hesap talebiniz iletildi.',
+  requestError: 'Talep gönderilemedi.',
+},
 
       payment: {
         title: 'Ödeme',
