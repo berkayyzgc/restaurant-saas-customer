@@ -11,6 +11,21 @@ export type Payment = {
   completedAt?: string | null
 }
 
+export type IyzicoCardDetails = {
+  cardHolderName: string
+  cardNumber: string
+  expireMonth: string
+  expireYear: string
+  cvc: string
+}
+
+type IyzicoPaymentResponse = {
+  success: boolean
+  message: string
+  iyzicoPaymentId: string
+  payment: Payment
+}
+
 const API_URL = 'http://localhost:3000'
 
 async function getErrorMessage(
@@ -53,13 +68,21 @@ export async function createCustomerPayment(
   return response.json() as Promise<Payment>
 }
 
-export async function completeCustomerPayment(
+export async function processIyzicoPayment(
   paymentId: number,
+  cardDetails: IyzicoCardDetails,
 ): Promise<Payment> {
   const response = await fetch(
-    `${API_URL}/payment/${paymentId}/complete`,
+    `${API_URL}/payment/iyzico`,
     {
-      method: 'PATCH',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        paymentId,
+        ...cardDetails,
+      }),
     },
   )
 
@@ -67,22 +90,29 @@ export async function completeCustomerPayment(
     throw new Error(
       await getErrorMessage(
         response,
-        'Ödeme tamamlanamadı.',
+        'iyzico ödeme işlemi başarısız oldu.',
       ),
     )
   }
 
-  return response.json() as Promise<Payment>
+  const result =
+    (await response.json()) as IyzicoPaymentResponse
+
+  return result.payment
 }
 
 export async function payTableBill(
   tableSessionId: number,
   keepSessionOpen: boolean,
+  cardDetails: IyzicoCardDetails,
 ): Promise<Payment> {
   const payment = await createCustomerPayment(
     tableSessionId,
     keepSessionOpen,
   )
 
-  return completeCustomerPayment(payment.id)
+  return processIyzicoPayment(
+    payment.id,
+    cardDetails,
+  )
 }

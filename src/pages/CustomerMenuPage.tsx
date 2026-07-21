@@ -446,10 +446,20 @@ export default function CustomerMenuPage() {
     setPaymentError(null);
 
     try {
-      const payment = await payTableBill(
-        trackedOrder.tableSessionId,
-        keepSessionOpen,
-      );
+      const [expireMonth, shortExpireYear] = cardExpiry.split("/");
+const expireYear = `20${shortExpireYear}`;
+
+const payment = await payTableBill(
+  trackedOrder.tableSessionId,
+  keepSessionOpen,
+  {
+    cardHolderName: cardholderName.trim(),
+    cardNumber: cardDigits,
+    expireMonth,
+    expireYear,
+    cvc: cardCvv,
+  },
+);
 
       setTrackedOrder((currentOrder) => {
         if (!currentOrder) {
@@ -803,6 +813,22 @@ export default function CustomerMenuPage() {
         )}
       </div>
 
+{billSummary && (
+  <section className="order-tracking-section">
+    <div className="customer-bill-summary">
+      <div>
+        <p className="section-kicker">Hesabım</p>
+        <h3>Güncel Toplam</h3>
+        <small>Masadaki tüm siparişlerin kalan toplamı</small>
+      </div>
+
+      <strong>
+        {formatPrice(billSummary.remainingAmount ?? 0)}
+      </strong>
+    </div>
+  </section>
+)}
+
       {trackedOrder && (
         <section className="order-tracking-section">
           <div className="order-tracking-header">
@@ -995,12 +1021,12 @@ export default function CustomerMenuPage() {
                       </button>
 
                       <button
-                        className="add-to-cart-button"
-                        type="button"
-                        onClick={() => addItem(item)}
-                      >
-                        {t("menu.addToCart")}
-                      </button>
+  className="add-to-cart-button"
+  type="button"
+  onClick={() => addItem(item)}
+>
+  Sepete Ekle
+</button>
                     </div>
                   </article>
                 ))}
