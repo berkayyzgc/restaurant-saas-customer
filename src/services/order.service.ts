@@ -1,3 +1,5 @@
+const API_URL = import.meta.env.VITE_API_URL
+
 export interface CreateOrderItem {
   menuItemId: number
   quantity: number
@@ -39,7 +41,7 @@ export async function createOrder(
   payload: CreateOrderPayload,
 ): Promise<CreatedOrder> {
   const response = await fetch(
-    'http://localhost:3000/orders',
+    `${API_URL}/orders`,
     {
       method: 'POST',
       headers: {
@@ -72,7 +74,7 @@ export async function getActiveOrderByTable(
   tableId: number,
 ): Promise<CreatedOrder | null> {
   const response = await fetch(
-    `http://localhost:3000/orders/table/${tableId}/active`,
+    `${API_URL}/orders/table/${tableId}/active`,
   )
 
   if (!response.ok) {
@@ -96,7 +98,7 @@ export async function getTableBillSummary(
   tableId: number,
 ): Promise<TableBillSummary> {
   const response = await fetch(
-    `http://localhost:3000/orders/table/${tableId}/bill-summary`,
+    `${API_URL}/orders/table/${tableId}/bill-summary`,
   )
 
   if (!response.ok) {
