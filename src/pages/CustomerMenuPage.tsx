@@ -8,9 +8,11 @@ import {
   createOrder,
   getActiveOrderByTable,
   getTableBillSummary,
+  getTableSessionOrders,
   type CreatedOrder,
   type OrderStatus,
   type TableBillSummary,
+  type TableSessionOrder,
 } from "../services/order.service";
 import { payTableBill } from "../services/payment.service";
 import { sendAiMessage, type AiSuggestion } from "../services/ai.service";
@@ -23,7 +25,10 @@ import {
   requestBill,
   type ServiceRequestType,
 } from "../services/service-request.service";
-import { getTableByQrToken } from "../services/table.service";
+import {
+  closeTableSession,
+  getTableByQrToken,
+} from "../services/table.service";
 import type { MenuCategory, TableDetails } from "../types/table";
 
 type CustomerTrackedOrder = CreatedOrder & {
@@ -69,6 +74,14 @@ const orderSteps: Array<{
     description: "Siparişiniz masanıza teslim edildi.",
   },
 ];
+const orderStatusLabels: Record<OrderStatus, string> = {
+  PENDING: "Sipariş alındı",
+  ACCEPTED: "Kabul edildi",
+  PREPARING: "Hazırlanıyor",
+  READY: "Servise hazır",
+  SERVED: "Teslim edildi",
+  CANCELLED: "İptal edildi",
+};
 const customerLanguages = [
   { code: "tr", label: "Türkçe", flag: "🇹🇷" },
   { code: "en", label: "English", flag: "🇬🇧" },
@@ -100,9 +113,23 @@ export default function CustomerMenuPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [orderSuccess, setOrderSuccess] = useState(false);
-  const [trackedOrder, setTrackedOrder] = useState<CustomerTrackedOrder | null>(
-    null,
-  );
+  const [trackedOrder, setTrackedOrder] =
+  useState<CustomerTrackedOrder | null>(null);
+  const [isClosingTable, setIsClosingTable] = useState(false)
+  const [tableCloseMessage, setTableCloseMessage] =
+  useState<string | null>(null)
+
+const [orderHistory, setOrderHistory] =
+  useState<TableSessionOrder[]>([]);
+  const [isOrderHistoryOpen, setIsOrderHistoryOpen] = useState(false);
+  type CustomerPanel =
+  | "account"
+  | "orders"
+  | "service"
+  | null;
+
+const [activePanel, setActivePanel] =
+  useState<CustomerPanel>(null);
   const [billSummary, setBillSummary] = useState<TableBillSummary | null>(null);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
@@ -160,10 +187,16 @@ export default function CustomerMenuPage() {
         }
 
         try {
-          const [activeOrder, currentBillSummary] = await Promise.all([
-            getActiveOrderByTable(data.id),
-            getTableBillSummary(data.id),
-          ]);
+          const [
+  activeOrder,
+  currentBillSummary,
+  history,
+] = await Promise.all([
+  getActiveOrderByTable(data.id),
+  getTableBillSummary(data.id),
+  getTableSessionOrders(data.id),
+]);
+setOrderHistory(history);
 
           setTrackedOrder(activeOrder as CustomerTrackedOrder | null);
 
@@ -213,6 +246,8 @@ const socket = io(SOCKET_URL)
         };
       });
     });
+
+    
 
     return () => {
       socket.off("connect");
@@ -390,6 +425,9 @@ const socket = io(SOCKET_URL)
       const updatedBillSummary = await getTableBillSummary(table.id);
 
       setBillSummary(updatedBillSummary);
+
+const history = await getTableSessionOrders(table.id);
+setOrderHistory(history);
 
       clearCart();
       setOrderNote("");
@@ -586,6 +624,42 @@ const payment = await payTableBill(
     addItem(menuItem);
   }
 
+  async function handleCloseTableSession() {
+    if (!table || isClosingTable) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Masadan kalkmak ve masa oturumunu kapatmak istediğinize emin misiniz?",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsClosingTable(true);
+    setTableCloseMessage(null);
+
+    try {
+      await closeTableSession(token!)
+      setTableCloseMessage(
+        "Masa başarıyla kapatıldı. Bizi tercih ettiğiniz için teşekkür ederiz.",
+      );
+      setTrackedOrder(null);
+      setBillSummary(null);
+      setOrderHistory([]);
+    } catch (requestError: unknown) {
+      console.error("Masa kapatılamadı:", requestError);
+      setTableCloseMessage(
+        requestError instanceof Error
+          ? requestError.message
+          : "Masa kapatılamadı.",
+      );
+    } finally {
+      setIsClosingTable(false);
+    }
+  }
+
   if (error) {
     return (
       <main className="state-page">
@@ -692,72 +766,125 @@ const payment = await payTableBill(
         </button>
       </header>
 
+      <section
+  style={{
+    display: "grid",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    gap: "12px",
+    marginBottom: "24px",
+  }}
+>
+  <button
+    type="button"
+    onClick={() =>
+      setActivePanel((current) =>
+        current === "account" ? null : "account",
+      )
+    }
+    style={{
+      padding: "18px",
+      borderRadius: "18px",
+      border:
+        activePanel === "account"
+          ? "2px solid #d99a2b"
+          : "1px solid rgba(15, 23, 42, 0.12)",
+      background:
+        activePanel === "account" ? "#fff8e8" : "#ffffff",
+      cursor: "pointer",
+      textAlign: "left",
+    }}
+  >
+    <strong
+  style={{
+    display: "block",
+    fontSize: "17px",
+    color: "#111827",
+    marginBottom: "6px",
+  }}
+>
+      💰 Güncel Hesap
+    </strong>
+    <span style={{ fontSize: "13px", color: "#64748b" }}>
+      Masa toplamını görüntüle
+    </span>
+  </button>
 
-      <section className="customer-weather-section">
-        <div className="customer-weather-heading">
-          <div>
-            <p className="customer-weather-kicker">Güncel Hava Durumu</p>
-            <h2>{table.restaurant.city || "Restoran Konumu"}</h2>
-          </div>
-          <span className="customer-weather-live">Canlı</span>
-        </div>
+  <button
+    type="button"
+    onClick={() =>
+      setActivePanel((current) =>
+        current === "orders" ? null : "orders",
+      )
+    }
+    style={{
+      padding: "18px",
+      borderRadius: "18px",
+      border:
+        activePanel === "orders"
+          ? "2px solid #d99a2b"
+          : "1px solid rgba(15, 23, 42, 0.12)",
+      background:
+        activePanel === "orders" ? "#fff8e8" : "#ffffff",
+      cursor: "pointer",
+      textAlign: "left",
+    }}
+  >
+    <strong
+  style={{
+    display: "block",
+    fontSize: "17px",
+    color: "#111827",
+    marginBottom: "6px",
+  }}
+>
+      📜 Siparişlerim
+    </strong>
+    <span style={{ fontSize: "13px", color: "#64748b" }}>
+      Geçmiş ve aktif siparişler
+    </span>
+  </button>
 
-        {isWeatherLoading && !weather && (
-          <div className="customer-weather-loading">
-            <span>🌤️</span>
-            <div>
-              <strong>Hava durumu yükleniyor</strong>
-              <p>Lütfen kısa bir süre bekleyin.</p>
-            </div>
-          </div>
-        )}
+  <button
+    type="button"
+    onClick={() =>
+      setActivePanel((current) =>
+        current === "service" ? null : "service",
+      )
+    }
+    style={{
+      padding: "18px",
+      borderRadius: "18px",
+      border:
+        activePanel === "service"
+          ? "2px solid #d99a2b"
+          : "1px solid rgba(15, 23, 42, 0.12)",
+      background:
+        activePanel === "service" ? "#fff8e8" : "#ffffff",
+      cursor: "pointer",
+      textAlign: "left",
+    }}
+  >
+    <strong
+  style={{
+    display: "block",
+    fontSize: "17px",
+    color: "#111827",
+    marginBottom: "6px",
+  }}
+>
+      🛎️ Servis
+    </strong>
+    <span style={{ fontSize: "13px", color: "#64748b" }}>
+      Garson ve servis işlemleri
+    </span>
+  </button>
 
-        {weatherError && !weather && (
-          <div className="customer-weather-error">
-            <strong>Hava durumu gösterilemedi</strong>
-            <p>{weatherError}</p>
-          </div>
-        )}
+</section>
 
-        {weather && (
-          <div className="customer-weather-card">
-            <div className="customer-weather-main">
-              <span className="customer-weather-icon">
-  {weather.icon}
-</span>
-              <div>
-                <strong className="customer-weather-temperature">
-                  {Math.round(weather.temperature)}°
-                </strong>
-                <p>{weather.description}</p>
-                <small>
-                  Hissedilen {Math.round(weather.apparentTemperature)}°
-                </small>
-              </div>
-            </div>
-
-            <div className="customer-weather-details">
-              <div>
-                <span>💧</span>
-                <p>Nem</p>
-                <strong>%{Math.round(weather.humidity)}</strong>
-              </div>
-              <div>
-                <span>🌧️</span>
-                <p>Yağış</p>
-                <strong>{weather.precipitation} mm</strong>
-              </div>
-              <div>
-                <span>💨</span>
-                <p>Rüzgâr</p>
-                <strong>{Math.round(weather.windSpeed)} km/sa</strong>
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
-
-      <div className="customer-service-actions">
+      {activePanel === "service" && (
+  <div className="customer-service-actions">
+    
+    
         <div className="customer-service-heading">
           <p className="section-kicker">{t("serviceRequest.title")}</p>
 
@@ -802,6 +929,26 @@ const payment = await payTableBill(
               <small>{t("serviceRequest.requestBillDescription")}</small>
             </div>
           </button>
+          <button
+  type="button"
+  className="customer-service-button"
+  onClick={handleCloseTableSession}
+  disabled={isClosingTable}
+>
+  <span>🚶</span>
+
+  <div>
+    <strong>
+      {isClosingTable
+        ? "Masa kapatılıyor..."
+        : "Masadan Kalkıyorum"}
+    </strong>
+
+    <small>
+      Ödemeyi yaptıktan sonra masayı boşalt.
+    </small>
+  </div>
+</button>
         </div>
 
         {serviceRequestMessage && (
@@ -813,9 +960,16 @@ const payment = await payTableBill(
         {serviceRequestError && (
           <p className="service-request-message error">{serviceRequestError}</p>
         )}
-      </div>
 
-{billSummary && (
+        {tableCloseMessage && (
+          <p className="service-request-message success">
+            {tableCloseMessage}
+          </p>
+        )}
+      </div>
+      )}
+
+{activePanel === "account" && billSummary && (
   <section className="order-tracking-section">
     <div className="customer-bill-summary">
       <div>
@@ -828,26 +982,262 @@ const payment = await payTableBill(
         {formatPrice(billSummary.remainingAmount ?? 0)}
       </strong>
     </div>
+
+    {trackedOrder?.paymentStatus === "PAID" && (
+      <div className="customer-payment-paid">
+        <strong>✓ Ödeme tamamlandı</strong>
+        <p>Bu masa için ödeme başarıyla alındı.</p>
+      </div>
+    )}
+
+    {canPayOrder && (
+      <div className="customer-payment-action">
+        <div>
+          <p className="section-kicker">Masadan ödeme</p>
+          <h3>Hesabınızı ödeyin</h3>
+          <p>
+            Ödeme sonrasında masada kalmayı veya hesabı kapatmayı
+            seçebilirsiniz.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="customer-pay-button"
+          onClick={openPaymentModal}
+        >
+          💳 Hesabı Öde
+        </button>
+      </div>
+    )}
   </section>
 )}
 
-      {trackedOrder && (
+{activePanel === "orders" &&
+  orderHistory.length > 0 && (
+  <section className="order-tracking-section">
+  
+    <button
+  type="button"
+  className="order-tracking-header"
+  style={{
+    width: "100%",
+    background: "#fff",
+    border: "none",
+    cursor: "pointer",
+    padding: 0,
+    textAlign: "left",
+  }}
+  onClick={() =>
+    setIsOrderHistoryOpen((current) => !current)
+  }
+>
+  <div>
+    <p className="section-kicker">Masadaki siparişler</p>
+    <h2>Sipariş Geçmişim</h2>
+    <p className="order-tracking-table">
+      Bu masa oturumunda verdiğiniz tüm siparişler
+    </p>
+  </div>
+
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      gap: "10px",
+    }}
+  >
+    <strong>{orderHistory.length} sipariş</strong>
+
+    <span>
+      {isOrderHistoryOpen ? "▲" : "▼"}
+    </span>
+    
+  </div>
+</button>
+{isOrderHistoryOpen && (
+    <div
+      style={{
+        display: "grid",
+        gap: "16px",
+        marginTop: "20px",
+      }}
+    >
+      {orderHistory.map((order, index) => (
+        <article
+          key={order.id}
+          style={{
+            padding: "18px",
+            borderRadius: "18px",
+            border: "1px solid rgba(15, 23, 42, 0.12)",
+            background: "#ffffff",
+            boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              gap: "12px",
+              marginBottom: "16px",
+            }}
+          >
+            <div>
+              <p
+                style={{
+                  margin: 0,
+                  fontSize: "13px",
+                  fontWeight: 800,
+                  color: "#64748b",
+                }}
+              >
+                Sipariş #{orderHistory.length - index}
+              </p>
+
+              <h3
+                style={{
+                  margin: "5px 0 0",
+                  fontSize: "18px",
+                }}
+              >
+                {new Date(order.createdAt).toLocaleTimeString("tr-TR", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </h3>
+            </div>
+
+            <span
+              style={{
+                padding: "8px 12px",
+                borderRadius: "999px",
+                fontSize: "13px",
+                fontWeight: 800,
+                background:
+                  order.status === "SERVED"
+                    ? "#dcfce7"
+                    : order.status === "CANCELLED"
+                      ? "#fee2e2"
+                      : order.status === "READY"
+                        ? "#dbeafe"
+                        : "#fef3c7",
+                color:
+                  order.status === "SERVED"
+                    ? "#166534"
+                    : order.status === "CANCELLED"
+                      ? "#991b1b"
+                      : order.status === "READY"
+                        ? "#1e40af"
+                        : "#92400e",
+              }}
+              
+            >
+              {orderStatusLabels[order.status]}
+            </span>
+          </div>
+          
+
+          <div
+            style={{
+              display: "grid",
+              gap: "10px",
+            }}
+          >
+            {order.items.map((item) => (
+              <div
+                key={item.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "16px",
+                  paddingBottom: "10px",
+                  borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
+                }}
+              >
+                <div>
+                  
+                  <strong>
+                    {item.quantity} × {item.itemName}
+                  </strong>
+
+                  {item.note && (
+                    <p
+                      style={{
+                        margin: "4px 0 0",
+                        color: "#64748b",
+                        fontSize: "13px",
+                      }}
+                    >
+                      Not: {item.note}
+                    </p>
+                  )}
+                </div>
+                
+
+                <strong>
+                  {formatPrice(
+                    Number(item.unitPrice) * item.quantity,
+                  )}
+                </strong>
+              </div>
+            ))}
+          </div>
+
+          {order.note && (
+            <p
+              style={{
+                margin: "14px 0 0",
+                padding: "10px 12px",
+                borderRadius: "12px",
+                background: "#f8fafc",
+                color: "#475569",
+                fontSize: "14px",
+              }}
+            >
+              Sipariş notu: {order.note}
+            </p>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginTop: "16px",
+            }}
+          >
+            <span
+              style={{
+                fontWeight: 700,
+                color: "#64748b",
+              }}
+            >
+              Sipariş toplamı
+            </span>
+
+            <strong
+              style={{
+                fontSize: "18px",
+              }}
+            >
+              {formatPrice(order.totalPrice)}
+            </strong>
+          </div>
+        </article>
+      ))}
+    </div>
+      )}
+
+  </section>
+)}
+
+      {activePanel === "orders" && trackedOrder && (
         <section className="order-tracking-section">
           <div className="order-tracking-header">
             <div>
-              <div className="customer-bill-summary">
-                <div>
-                  <p className="section-kicker">Hesabım</p>
-
-                  <h3>Güncel Toplam</h3>
-
-                  <small>Masadaki tüm siparişlerin kalan toplamı</small>
-                </div>
-
-                <strong>
-                  {formatPrice(billSummary?.remainingAmount ?? 0)}
-                </strong>
-              </div>
+             
               <p className="section-kicker">Canlı sipariş takibi</p>
 
               <h2>
@@ -913,37 +1303,75 @@ const payment = await payTableBill(
                 })}
               </div>
 
-              {trackedOrder.paymentStatus === "PAID" && (
-                <div className="customer-payment-paid">
-                  <strong>✓ Ödeme tamamlandı</strong>
-                  <p>Bu sipariş için ödeme başarıyla alındı.</p>
-                </div>
-              )}
-
-              {canPayOrder && (
-                <div className="customer-payment-action">
-                  <div>
-                    <p className="section-kicker">Masadan ödeme</p>
-                    <h3>Hesabınızı ödeyin</h3>
-                    <p>
-                      Ödeme sonrasında masada kalmayı veya hesabı kapatmayı
-                      seçebilirsiniz.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="customer-pay-button"
-                    onClick={openPaymentModal}
-                  >
-                    💳 Hesabı Öde
-                  </button>
-                </div>
-              )}
+  
             </>
           )}
         </section>
       )}
+
+      <section className="customer-weather-section">
+        <div className="customer-weather-heading">
+          <div>
+            <p className="customer-weather-kicker">Güncel Hava Durumu</p>
+            <h2>{table.restaurant.city || "Restoran Konumu"}</h2>
+          </div>
+          <span className="customer-weather-live">Canlı</span>
+        </div>
+
+        {isWeatherLoading && !weather && (
+          <div className="customer-weather-loading">
+            <span>🌤️</span>
+            <div>
+              <strong>Hava durumu yükleniyor</strong>
+              <p>Lütfen kısa bir süre bekleyin.</p>
+            </div>
+          </div>
+        )}
+
+        {weatherError && !weather && (
+          <div className="customer-weather-error">
+            <strong>Hava durumu gösterilemedi</strong>
+            <p>{weatherError}</p>
+          </div>
+        )}
+
+        {weather && (
+          <div className="customer-weather-card">
+            <div className="customer-weather-main">
+              <span className="customer-weather-icon">
+  {weather.icon}
+</span>
+              <div>
+                <strong className="customer-weather-temperature">
+                  {Math.round(weather.temperature)}°
+                </strong>
+                <p>{weather.description}</p>
+                <small>
+                  Hissedilen {Math.round(weather.apparentTemperature)}°
+                </small>
+              </div>
+            </div>
+
+            <div className="customer-weather-details">
+              <div>
+                <span>💧</span>
+                <p>Nem</p>
+                <strong>%{Math.round(weather.humidity)}</strong>
+              </div>
+              <div>
+                <span>🌧️</span>
+                <p>Yağış</p>
+                <strong>{weather.precipitation} mm</strong>
+              </div>
+              <div>
+                <span>💨</span>
+                <p>Rüzgâr</p>
+                <strong>{Math.round(weather.windSpeed)} km/sa</strong>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       <section className="category-navigation">
         <div className="section-heading">

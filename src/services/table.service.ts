@@ -17,16 +17,20 @@ export async function getTableByQrToken(
 }
 
 export async function closeTableSession(
-  tableId: number,
+  token: string,
 ): Promise<void> {
   const response = await fetch(
-    `${API_URL}/tables/${tableId}/close-session`,
+    `${API_URL}/tables/qr/${token}/close-session`,
     {
       method: 'PATCH',
     },
   )
 
   if (!response.ok) {
-    throw new Error('Masa kapatılamadı')
+    const errorData = await response.json().catch(() => null)
+
+    throw new Error(
+      errorData?.message ?? 'Masa kapatılamadı',
+    )
   }
 }

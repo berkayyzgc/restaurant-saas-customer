@@ -29,6 +29,24 @@ export interface CreatedOrder {
   updatedAt: string
 }
 
+export interface CustomerOrderItem {
+  id: number
+  menuItemId: number
+  itemName: string
+  quantity: number
+  unitPrice: number | string
+  note: string | null
+}
+
+export interface TableSessionOrder extends CreatedOrder {
+  acceptedAt: string | null
+  preparingAt: string | null
+  readyAt: string | null
+  servedAt: string | null
+  cancelledAt: string | null
+  items: CustomerOrderItem[]
+}
+
 export interface TableBillSummary {
   tableSessionId: number | null
   totalAmount: number
@@ -108,4 +126,20 @@ export async function getTableBillSummary(
   }
 
   return response.json() as Promise<TableBillSummary>
+}
+
+export async function getTableSessionOrders(
+  tableId: number,
+): Promise<TableSessionOrder[]> {
+  const response = await fetch(
+    `${API_URL}/orders/table/${tableId}/history`,
+  )
+
+  if (!response.ok) {
+    throw new Error(
+      'Masa sipariş geçmişi alınamadı.',
+    )
+  }
+
+  return response.json() as Promise<TableSessionOrder[]>
 }
