@@ -96,6 +96,16 @@ export default function CustomerMenuPage() {
   const { token } = useParams<{ token: string }>();
   const { t, i18n } = useTranslation();
 
+ type SelectedPaymentItem = {
+  orderItemId: number
+  selectedUnitIndexes: number[]
+}
+
+const [selectedPaymentItems, setSelectedPaymentItems] =
+  useState<SelectedPaymentItem[]>([])
+
+  
+
   const currentLanguage =
     customerLanguages.find(
       (language) => language.code === i18n.resolvedLanguage,
@@ -121,9 +131,111 @@ export default function CustomerMenuPage() {
 
 const [orderHistory, setOrderHistory] =
   useState<TableSessionOrder[]>([]);
+
+const selectedPaymentTotal = useMemo(() => {
+  return orderHistory.reduce((total, order) => {
+    if (order.paymentStatus === "PAID") {
+      return total;
+    }
+
+    const orderTotal = order.items.reduce(
+      (itemTotal, item) => {
+        if (
+  !selectedPaymentItems.some(
+    (selected) => selected.orderItemId === item.id,
+  )
+) {
+  return itemTotal;
+}
+        const selectedItem = selectedPaymentItems.find(
+  (selected) => selected.orderItemId === item.id,
+)
+
+const selectedQuantity =
+  selectedItem?.selectedUnitIndexes.length ?? 0
+
+return (
+  itemTotal +
+  Number(item.unitPrice) * selectedQuantity
+)
+      },
+      0,
+    );
+
+    return total + orderTotal;
+  }, 0);
+}, [orderHistory, selectedPaymentItems]);
+
+const paymentItems = orderHistory.flatMap((order) =>
+  order.items
+    .filter((item) =>
+  selectedPaymentItems.some(
+    (selected) => selected.orderItemId === item.id,
+  ),
+)
+    .map((item) => {
+      
+
+      const selectedItem = selectedPaymentItems.find(
+  (selected) => selected.orderItemId === item.id,
+)
+
+return {
+  orderItemId: item.id,
+  quantity: selectedItem?.selectedUnitIndexes.length ?? 0,
+}
+    }),
+)
+  
+const allUnpaidPaymentItems = useMemo(() => {
+  return orderHistory.flatMap((order) =>
+    order.items.flatMap((item) => {
+      const paidQuantity = item.paymentItems.reduce(
+        (sum, paymentItem) =>
+          sum + paymentItem.quantity,
+        0,
+      )
+
+      const remainingQuantity = Math.max(
+        item.quantity - paidQuantity,
+        0,
+      )
+
+      if (remainingQuantity <= 0) {
+        return []
+      }
+
+      return [
+        {
+          orderItemId: item.id,
+          selectedUnitIndexes: Array.from(
+            { length: remainingQuantity },
+            (_, index) => index,
+          ),
+        },
+      ]
+    }),
+  )
+}, [orderHistory])
+
+const totalUnpaidUnitCount = allUnpaidPaymentItems.reduce(
+  (total, item) =>
+    total + item.selectedUnitIndexes.length,
+  0,
+)
+
+const selectedUnitCount = selectedPaymentItems.reduce(
+  (total, item) =>
+    total + item.selectedUnitIndexes.length,
+  0,
+)
+
+const areAllUnpaidItemsSelected =
+  totalUnpaidUnitCount > 0 &&
+  selectedUnitCount === totalUnpaidUnitCount
+  
   const [isOrderHistoryOpen, setIsOrderHistoryOpen] = useState(false);
-  type CustomerPanel =
-  | "account"
+ type CustomerPanel =
   | "orders"
   | "service"
   | null;
@@ -391,7 +503,7 @@ const socket = io(SOCKET_URL)
   }, [trackedOrder]);
 
   const canPayOrder =
-    trackedOrder?.status === "SERVED" && trackedOrder.paymentStatus !== "PAID";
+  (billSummary?.remainingAmount ?? 0) > 0;
 
   function formatPrice(price: number | string) {
     return new Intl.NumberFormat("tr-TR", {
@@ -446,6 +558,15 @@ setOrderHistory(history);
     }
   }
 
+  function handleToggleSelectAllPaymentItems() {
+  if (areAllUnpaidItemsSelected) {
+    setSelectedPaymentItems([])
+    return
+  }
+
+  setSelectedPaymentItems(allUnpaidPaymentItems)
+}
+
   function openPaymentModal() {
     setPaymentError(null);
     setKeepSessionOpen(true);
@@ -462,9 +583,9 @@ setOrderHistory(history);
   }
 
   async function handlePayBill() {
-    if (!trackedOrder || isPaying) {
-      return;
-    }
+   if (!trackedOrder || !table || isPaying) {
+  return;
+}
     const cardDigits = cardNumber.replace(/\s/g, "");
 
     if (
@@ -481,6 +602,18 @@ setOrderHistory(history);
       setPaymentError("Masa oturumu bilgisi bulunamadı.");
       return;
     }
+
+    const remainingAmount = Number(billSummary?.remainingAmount ?? 0)
+
+if (
+  !keepSessionOpen &&
+  selectedPaymentTotal < remainingAmount
+) {
+  setPaymentError(
+    "Masadan ayrılmak için kalan hesabın tamamını seçip ödemeniz gerekiyor.",
+  )
+  return
+}
 
     setIsPaying(true);
     setPaymentError(null);
@@ -499,7 +632,8 @@ const payment = await payTableBill(
     expireYear,
     cvc: cardCvv,
   },
-);
+  paymentItems,
+)
 
       setTrackedOrder((currentOrder) => {
         if (!currentOrder) {
@@ -513,6 +647,10 @@ const payment = await payTableBill(
         };
       });
 
+      const updatedHistory = await getTableSessionOrders(table.id)
+setOrderHistory(updatedHistory)
+setSelectedPaymentItems([])
+
       setIsPaymentOpen(false);
 
       setCardholderName("");
@@ -525,12 +663,16 @@ const payment = await payTableBill(
           "Ödemeniz başarıyla tamamlandı. Masada kalmaya ve yeni sipariş vermeye devam edebilirsiniz.",
         );
       } else {
-        setPaymentSuccessMessage(
-          "Ödemeniz başarıyla tamamlandı. Masa hesabınız kapatıldı.",
-        );
+  setPaymentSuccessMessage(
+    "Ödemeniz başarıyla tamamlandı. Masa hesabınız kapatıldı.",
+  )
 
-        setTrackedOrder(null);
-      }
+  setTrackedOrder(null)
+  setOrderHistory([])
+  setBillSummary(null)
+  setSelectedPaymentItems([])
+  setActivePanel(null)
+}
     } catch (requestError: unknown) {
       console.error("Ödeme işlemi başarısız:", requestError);
 
@@ -774,40 +916,7 @@ const payment = await payTableBill(
     marginBottom: "24px",
   }}
 >
-  <button
-    type="button"
-    onClick={() =>
-      setActivePanel((current) =>
-        current === "account" ? null : "account",
-      )
-    }
-    style={{
-      padding: "18px",
-      borderRadius: "18px",
-      border:
-        activePanel === "account"
-          ? "2px solid #d99a2b"
-          : "1px solid rgba(15, 23, 42, 0.12)",
-      background:
-        activePanel === "account" ? "#fff8e8" : "#ffffff",
-      cursor: "pointer",
-      textAlign: "left",
-    }}
-  >
-    <strong
-  style={{
-    display: "block",
-    fontSize: "17px",
-    color: "#111827",
-    marginBottom: "6px",
-  }}
->
-      💰 Güncel Hesap
-    </strong>
-    <span style={{ fontSize: "13px", color: "#64748b" }}>
-      Masa toplamını görüntüle
-    </span>
-  </button>
+  
 
   <button
     type="button"
@@ -969,13 +1078,22 @@ const payment = await payTableBill(
       </div>
       )}
 
-{activePanel === "account" && billSummary && (
+
+
+{activePanel === "orders" &&
+  orderHistory.length > 0 && (
   <section className="order-tracking-section">
+
+    {billSummary && (
+  <>
     <div className="customer-bill-summary">
       <div>
-        <p className="section-kicker">Hesabım</p>
-        <h3>Güncel Toplam</h3>
-        <small>Masadaki tüm siparişlerin kalan toplamı</small>
+        <p className="section-kicker">Güncel hesap</p>
+        <h3>Kalan Masa Hesabı</h3>
+
+        <small>
+          Ödeme yapıldıkça kalan tutar otomatik olarak güncellenir.
+        </small>
       </div>
 
       <strong>
@@ -983,21 +1101,15 @@ const payment = await payTableBill(
       </strong>
     </div>
 
-    {trackedOrder?.paymentStatus === "PAID" && (
-      <div className="customer-payment-paid">
-        <strong>✓ Ödeme tamamlandı</strong>
-        <p>Bu masa için ödeme başarıyla alındı.</p>
-      </div>
-    )}
-
-    {canPayOrder && (
+    {canPayOrder ? (
       <div className="customer-payment-action">
         <div>
           <p className="section-kicker">Masadan ödeme</p>
-          <h3>Hesabınızı ödeyin</h3>
+          <h3>Ödemek istediğiniz ürünleri seçin</h3>
+
           <p>
-            Ödeme sonrasında masada kalmayı veya hesabı kapatmayı
-            seçebilirsiniz.
+            Sipariş listesinden ürünleri seçerek kısmi veya tam ödeme
+            yapabilirsiniz.
           </p>
         </div>
 
@@ -1009,13 +1121,17 @@ const payment = await payTableBill(
           💳 Hesabı Öde
         </button>
       </div>
-    )}
-  </section>
-)}
+    ) : (
+      <div className="customer-payment-paid">
+        <strong>✓ Tüm ödemeler tamamlandı</strong>
 
-{activePanel === "orders" &&
-  orderHistory.length > 0 && (
-  <section className="order-tracking-section">
+        <p>
+          Bu masa oturumunda ödenmemiş ürün bulunmuyor.
+        </p>
+      </div>
+    )}
+  </>
+)}
   
     <button
   type="button"
@@ -1063,6 +1179,62 @@ const payment = await payTableBill(
         marginTop: "20px",
       }}
     >
+      {totalUnpaidUnitCount > 0 && (
+  <div
+    style={{
+      marginBottom: "20px",
+      padding: "16px",
+      borderRadius: "16px",
+      background: "#ffffff",
+      border: "1px solid rgba(15, 23, 42, 0.08)",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+    }}
+  >
+    <div>
+      <strong>Ödeme Seçimi</strong>
+
+      <div
+        style={{
+          fontSize: "14px",
+          color: "#64748b",
+          marginTop: "4px",
+        }}
+      >
+        {selectedUnitCount} / {totalUnpaidUnitCount} ürün seçildi
+      </div>
+    </div>
+
+    <button
+      type="button"
+      onClick={handleToggleSelectAllPaymentItems}
+    >
+      {areAllUnpaidItemsSelected
+        ? "Seçimleri Kaldır"
+        : "✓ Tümünü Seç"}
+    </button>
+  </div>
+)}
+      {selectedPaymentItems.length > 0 && (
+  <div
+    style={{
+      marginBottom: "20px",
+      padding: "16px",
+      borderRadius: "16px",
+      background: "#ffffff",
+      border: "1px solid rgba(15, 23, 42, 0.08)",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: "16px",
+    }}
+  >
+    <strong>Seçilen tutar</strong>
+
+    <strong>{formatPrice(selectedPaymentTotal)}</strong>
+  </div>
+)}
       {orderHistory.map((order, index) => (
         <article
           key={order.id}
@@ -1144,45 +1316,175 @@ const payment = await payTableBill(
               gap: "10px",
             }}
           >
-            {order.items.map((item) => (
-              <div
-                key={item.id}
+            {order.items.map((item) => {
+  const paidQuantity = item.paymentItems.reduce(
+    (sum, paymentItem) => sum + paymentItem.quantity,
+    0,
+  )
+
+  const remainingQuantity = Math.max(
+    item.quantity - paidQuantity,
+    0,
+  )
+
+
+  return (
+    <div
+      key={item.id}
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "flex-start",
+        gap: "16px",
+        paddingBottom: "10px",
+        borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
+          flex: 1,
+        }}
+      >
+{paidQuantity > 0 && (
+  <div
+    style={{
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: "12px",
+      padding: "10px 12px",
+      borderRadius: "12px",
+      background: "#dcfce7",
+      color: "#166534",
+    }}
+  >
+    <strong>✓ {item.itemName}</strong>
+
+    <span
+      style={{
+        fontSize: "13px",
+        fontWeight: 800,
+      }}
+    >
+      {paidQuantity} adet ödendi
+    </span>
+  </div>
+)}
+
+        {Array.from({ length: remainingQuantity }).map((_, index) => {
+          const selectedItem = selectedPaymentItems.find(
+            (selected) => selected.orderItemId === item.id,
+          )
+
+          const isChecked =
+  selectedItem?.selectedUnitIndexes.includes(index) ?? false
+
+          return (
+            <label
+              key={`${item.id}-${index}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "16px",
+              }}
+            >
+              <span
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
                   alignItems: "center",
-                  gap: "16px",
-                  paddingBottom: "10px",
-                  borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
+                  gap: "10px",
                 }}
               >
-                <div>
-                  
-                  <strong>
-                    {item.quantity} × {item.itemName}
-                  </strong>
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                 onChange={(event) => {
+  setSelectedPaymentItems((current) => {
+    const existingItem = current.find(
+      (selected) => selected.orderItemId === item.id,
+    )
 
-                  {item.note && (
-                    <p
-                      style={{
-                        margin: "4px 0 0",
-                        color: "#64748b",
-                        fontSize: "13px",
-                      }}
-                    >
-                      Not: {item.note}
-                    </p>
-                  )}
-                </div>
-                
+    const existingIndexes =
+      existingItem?.selectedUnitIndexes ?? []
 
-                <strong>
-                  {formatPrice(
-                    Number(item.unitPrice) * item.quantity,
-                  )}
-                </strong>
-              </div>
-            ))}
+    const nextIndexes = event.target.checked
+      ? existingIndexes.includes(index)
+        ? existingIndexes
+        : [...existingIndexes, index]
+      : existingIndexes.filter(
+          (selectedIndex) => selectedIndex !== index,
+        )
+
+    if (nextIndexes.length === 0) {
+      return current.filter(
+        (selected) => selected.orderItemId !== item.id,
+      )
+    }
+
+    if (existingItem) {
+      return current.map((selected) =>
+        selected.orderItemId === item.id
+          ? {
+              ...selected,
+              selectedUnitIndexes: nextIndexes,
+            }
+          : selected,
+      )
+    }
+
+    return [
+      ...current,
+      {
+        orderItemId: item.id,
+        selectedUnitIndexes: nextIndexes,
+      },
+    ]
+  })
+}}
+                />
+
+                <strong>{item.itemName}</strong>
+              </span>
+
+              <strong>{formatPrice(item.unitPrice)}</strong>
+            </label>
+          )
+        })}
+
+        {item.note && (
+          <p
+            style={{
+              margin: "4px 0 0",
+              color: "#64748b",
+              fontSize: "13px",
+            }}
+          >
+            Not: {item.note}
+          </p>
+        )}
+      </div>
+
+      <strong
+  style={{
+    color:
+      remainingQuantity > 0
+        ? "#111827"
+        : "#15803d",
+  }}
+>
+  {remainingQuantity > 0
+    ? formatPrice(
+        Number(item.unitPrice) * remainingQuantity,
+      )
+    : "Ödendi"}
+</strong>
+    </div>
+  )
+})}
           </div>
 
           {order.note && (
@@ -1232,6 +1534,7 @@ const payment = await payTableBill(
 
   </section>
 )}
+
 
       {activePanel === "orders" && trackedOrder && (
         <section className="order-tracking-section">

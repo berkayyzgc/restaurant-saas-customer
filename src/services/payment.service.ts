@@ -43,17 +43,22 @@ async function getErrorMessage(
 export async function createCustomerPayment(
   tableSessionId: number,
   keepSessionOpen: boolean,
+  items: {
+    orderItemId: number
+    quantity: number
+  }[],
 ): Promise<Payment> {
   const response = await fetch(`${API_URL}/payment`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      tableSessionId,
-      method: 'ONLINE',
-      keepSessionOpen,
-    }),
+  body: JSON.stringify({
+  tableSessionId,
+  method: 'ONLINE',
+  keepSessionOpen,
+  items,
+}),
   })
 
   if (!response.ok) {
@@ -105,11 +110,16 @@ export async function payTableBill(
   tableSessionId: number,
   keepSessionOpen: boolean,
   cardDetails: IyzicoCardDetails,
+  items: {
+    orderItemId: number
+    quantity: number
+  }[],
 ): Promise<Payment> {
   const payment = await createCustomerPayment(
-    tableSessionId,
-    keepSessionOpen,
-  )
+  tableSessionId,
+  keepSessionOpen,
+  items,
+)
 
   return processIyzicoPayment(
     payment.id,

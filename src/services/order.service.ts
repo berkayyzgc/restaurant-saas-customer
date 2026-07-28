@@ -36,9 +36,15 @@ export interface CustomerOrderItem {
   quantity: number
   unitPrice: number | string
   note: string | null
+
+  paymentItems: {
+    quantity: number
+  }[]
 }
 
 export interface TableSessionOrder extends CreatedOrder {
+  paymentStatus?: "UNPAID" | "PAID";
+paidAt?: string | null;
   acceptedAt: string | null
   preparingAt: string | null
   readyAt: string | null
